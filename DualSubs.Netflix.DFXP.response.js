@@ -1,30 +1,21 @@
 /*
  * DualSubs Netflix DFXP 字幕注入脚本
  * 
- * 功能：拦截 Netflix 字幕 CDN 响应，从指定 URL 下载 DFXP 格式字幕并替换原始字幕
- * 平台：Shadowrocket / Surge / Quantumult X
+ * 功能：拦截 Netflix MSL API 的字幕请求响应，
+ *       从指定 URL 下载 DFXP 格式字幕并注入
+ * 平台：Shadowrocket / Surge
  * 
- * ⚠️ 修改下方 DFXP_SUBTITLE_URL 变量为你的 DFXP 字幕文件下载地址
+ * 工作方式：拦截 *.oca.nflxvideo.net 字幕响应，
+ *           直接用 DFXP 内容替换
  */
 
 /***************** 配置区域 - 修改此处 *****************/
 
-// DFXP 字幕文件的下载 URL（修改为你自己的地址）
 const DFXP_SUBTITLE_URL = "https://raw.githubusercontent.com/liworlford/KivoSub/refs/heads/main/WeatheringwithYou2019JAPANESE1080pBluRayx264DTS-FGTch.dfxp";
 
 /***************** 配置区域结束 *****************/
 
 const NAME = "DualSubs.Netflix.DFXP";
-
-// 兼容多平台的工具函数
-const $platform = (() => {
-    if (typeof $loon !== "undefined") return "Loon";
-    if (typeof $task !== "undefined") return "Quantumult X";
-    if (typeof module !== "undefined" && typeof $done !== "undefined") return "Node.js";
-    if (typeof $httpClient !== "undefined") return "Surge";
-    if (typeof $rocket !== "undefined") return "Shadowrocket";
-    return "Surge"; // 默认
-})();
 
 function log(...args) {
     console.log(`[${NAME}]`, ...args);
@@ -32,16 +23,18 @@ function log(...args) {
 
 function httpGet(url) {
     return new Promise((resolve, reject) => {
-        const options = { url: url, headers: {} };
-        
+        const options = {
+            url: url,
+            headers: { "User-Agent": "Mozilla/5.0" },
+            policy: "DIRECT"
+        };
+
         if (typeof $task !== "undefined") {
-            // Quantumult X
             $task.fetch(options).then(
                 response => resolve(response),
                 reason => reject(reason.error || reason)
             );
         } else if (typeof $httpClient !== "undefined") {
-            // Surge / Shadowrocket / Loon
             $httpClient.get(options, (error, response, data) => {
                 if (error) reject(error);
                 else resolve({ status: response.status, body: data });
@@ -52,55 +45,71 @@ function httpGet(url) {
     });
 }
 
-function done(response) {
-    if (typeof $done !== "undefined") $done(response);
-}
-
 /***************** 主处理逻辑 *****************/
 (async () => {
-    log(`⚠ 拦截到 Netflix 字幕请求: ${$request.url}`);
-    
-    // 检查 DFXP URL 是否已配置
+    log(`⚠ 拦截到请求: ${$request.url}`);
+
     if (!DFXP_SUBTITLE_URL || DFXP_SUBTITLE_URL === "https://example.com/your-subtitle.dfxp") {
-        log(`⚠ DFXP_SUBTITLE_URL 未配置，跳过注入，返回原始字幕`);
-        done($response);
+        log(`⚠ DFXP_SUBTITLE_URL 未配置，跳过`);
+        $done($response);
         return;
     }
 
-    log(`⚠ 正在从 URL 下载 DFXP 字幕: ${DFXP_SUBTITLE_URL}`);
-    
+    // 检测是否为字幕请求（通过 Content-Type 判断）
+    const contentType = $response.headers?.["Content-Type"] || $response.headers?.["content-type"] || "";
+    const contentLength = parseInt($response.headers?.["Content-Length"] || $response.headers?.["content-length"] || "0", 10);
+
+    // 只处理字幕（文本类型、体积较小），跳过视频流（二进制、体积大）
+    const isSubtitle = contentType.includes("text/") ||
+                       contentType.includes("application/xml") ||
+                       contentType.includes("application/ttml") ||
+                       contentType.includes("application/vtt") ||
+                       contentLength < 1048576; // 小于 1MB 才处理
+
+    const isVideo = contentType.includes("video/") ||
+                    contentType.includes("application/octet-stream") ||
+                    contentLength > 5242880; // 大于 5MB 一定是视频
+
+    if (isVideo) {
+        log(`⏭ 跳过视频流: Content-Type=${contentType}, Content-Length=${contentLength}`);
+        $done($response);
+        return;
+    }
+
+    // 额外检查：如果 body 太大也跳过
+    if ($response.body && typeof $response.body === "string" && $response.body.length > 2097152) {
+        log(`⏭ 跳过大文件: body length=${$response.body.length}`);
+        $done($response);
+        return;
+    }
+
+    log(`📝 检测到字幕请求, Content-Type=${contentType}`);
+    log(`⬇️ 正在下载 DFXP 字幕: ${DFXP_SUBTITLE_URL}`);
+
     try {
-        // 从指定 URL 下载 DFXP 字幕
         const dfxpResponse = await httpGet(DFXP_SUBTITLE_URL);
-        
+
         if (dfxpResponse && dfxpResponse.body) {
-            log(`✅ DFXP 字幕下载成功, 大小: ${dfxpResponse.body.length} 字节`);
-            
-            // 用下载的 DFXP 字幕替换原始响应体
+            log(`✅ DFXP 下载成功, 大小: ${dfxpResponse.body.length} 字节`);
+
             $response.body = dfxpResponse.body;
-            
-            // 更新 Content-Type 为 DFXP/TTML 格式
+
             if ($response.headers) {
-                // DFXP 是 TTML 的早期名称，MIME 类型相同
-                const contentTypeKey = $response.headers["Content-Type"] ? "Content-Type" : "content-type";
-                $response.headers[contentTypeKey] = "application/ttml+xml; charset=utf-8";
-                
-                // 移除 Content-Length（因为 body 长度已变化）
+                // 不要修改 Content-Type！保持原始类型让 Netflix 客户端正确解析
+                // Netflix 自己知道期望什么格式
                 delete $response.headers["Content-Length"];
                 delete $response.headers["content-length"];
-                
-                // 移除 Content-Encoding（确保不做压缩处理）
                 delete $response.headers["Content-Encoding"];
                 delete $response.headers["content-encoding"];
             }
-            
+
             log(`✅ DFXP 字幕注入完成`);
         } else {
-            log(`❌ DFXP 字幕下载失败: 响应为空，返回原始字幕`);
+            log(`❌ DFXP 下载失败: 响应为空`);
         }
     } catch (error) {
-        log(`❌ DFXP 字幕下载出错: ${error}, 返回原始字幕`);
+        log(`❌ DFXP 下载出错: ${error}`);
     }
 })()
-    .catch(e => log(`❌ 脚本执行��错: ${e}`))
-    .finally(() => done($response));
+    .catch(e => log(`❌ 脚本错误: ${e}`))
+    .finally(() => $done($response));
