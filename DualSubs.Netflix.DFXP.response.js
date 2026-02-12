@@ -1,160 +1,60 @@
 /*
- * DualSubs Netflix DFXP 字幕注入脚本
- * 拦截 Netflix 字幕 CDN 响应，下载 DFXP 并转为 Netflix TTML 格式注入
+ * Netflix 字幕替换脚本
+ * 模仿 DualSubs/Netflix 正式版方案
+ * 直接替换 *.oca.nflxvideo.net 字幕 CDN 的响应体
+ * 不发起任何外部网络请求
  */
+const NAME = "KivoSub";
 
-/***************** 配置区域 *****************/
-const DFXP_SUBTITLE_URL = "https://raw.githubusercontent.com/liworlford/KivoSub/refs/heads/main/WeatheringwithYou2019JAPANESE1080pBluRayx264DTS-FGTch.dfxp";
-/***************** 配置区域结束 *****************/
-
-const NAME = "DualSubs.Netflix.DFXP";
-
-function log(...args) {
-    console.log(`[${NAME}]`, ...args);
-}
-
-function notify(title, subtitle, message) {
-    if (typeof $notification !== "undefined") {
-        $notification.post(title, subtitle, message);
-    } else if (typeof $notify !== "undefined") {
-        $notify(title, subtitle, message);
-    }
-}
-
-function httpGet(url) {
-    return new Promise((resolve, reject) => {
-        const options = {
-            url: url,
-            headers: {
-                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
-                "Accept": "*/*",
-                "X-Surge-Skip-Scripting": "true"
-            }
-        };
-
-        if (typeof $task !== "undefined") {
-            $task.fetch(options).then(
-                response => resolve(response),
-                reason => reject(reason.error || reason)
-            );
-        } else if (typeof $httpClient !== "undefined") {
-            $httpClient.get(options, (error, response, data) => {
-                if (error) reject(error);
-                else resolve({ status: response.status, body: data });
-            });
-        } else {
-            reject(new Error("Unsupported platform"));
-        }
-    });
-}
-
-function convertDfxpToNetflixTtml(dfxpContent) {
-    const subtitles = [];
-    const regex = /<p\s+begin="([^"]+)"\s+end="([^"]+)"[^>]*>([\s\S]*?)<\/p>/gi;
-    let match;
-    while ((match = regex.exec(dfxpContent)) !== null) {
-        subtitles.push({
-            begin: match[1],
-            end: match[2],
-            text: match[3].trim()
-        });
-    }
-
-    log(`🔄 提取到 ${subtitles.length} 条字幕`);
-    if (subtitles.length === 0) return null;
-
-    let ttml = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<tt xmlns="http://www.w3.org/ns/ttml" xmlns:tts="http://www.w3.org/ns/ttml#styling" xmlns:ttp="http://www.w3.org/ns/ttml#parameter" ttp:tickRate="10000000" xml:lang="zh">
+// ===== 内嵌的 Netflix TTML 字幕（直接写在脚本里） =====
+const SUBTITLE_TTML = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<tt xmlns="http://www.w3.org/ns/ttml" xmlns:tts="http://www.w3.org/ns/ttml#styling" xmlns:ttp="http://www.w3.org/ns/ttml#parameter" xml:lang="zh">
 <head>
 <styling>
-<style xml:id="s1" tts:fontFamily="proportionalSansSerif" tts:fontSize="100%" tts:textAlign="center" tts:color="white"/>
+<style xml:id="s1" tts:color="white" tts:fontFamily="proportionalSansSerif" tts:fontSize="100%" tts:textAlign="center"/>
 </styling>
 <layout>
-<region xml:id="r1" tts:origin="10% 80%" tts:extent="80% 15%" tts:displayAlign="after" tts:textAlign="center"/>
+<region xml:id="r1" tts:displayAlign="after" tts:extent="80% 15%" tts:origin="10% 80%" tts:textAlign="center"/>
 </layout>
 </head>
 <body>
-<div xml:lang="zh">
-`;
-
-    for (const sub of subtitles) {
-        const text = sub.text
-            .replace(/&(?!amp;|lt;|gt;|quot;|apos;)/g, "&amp;")
-            .replace(/\n/g, "<br/>");
-        ttml += `<p begin="${sub.begin}" end="${sub.end}" region="r1" style="s1">${text}</p>\n`;
-    }
-
-    ttml += `</div>
+<div>
+<p begin="00:00:54.179" end="00:00:57.683" region="r1" style="s1">这是只有我和她才知道的</p>
+<p begin="00:00:58.350" end="00:01:02.062" region="r1" style="s1">关于这个世界秘密的故事</p>
+<p begin="00:01:35.012" end="00:01:38.599" region="r1" style="s1">那仿佛就像闪着微光的水洼</p>
+<p begin="00:01:39.600" end="00:01:43.145" region="r1" style="s1">回过神来，她已冲出医��</p>
+<p begin="00:02:35.697" end="00:02:38.283" region="r1" style="s1">她不自禁地一边祈愿着</p>
+<p begin="00:02:39.034" end="00:02:41.453" region="r1" style="s1">一边穿过了那座鸟居</p>
+<p begin="00:03:03.183" end="00:03:04.226" region="r1" style="s1">鱼？</p>
+<p begin="00:03:17.489" end="00:03:19.074" region="r1" style="s1">回想起来</p>
+<p begin="00:03:19.199" end="00:03:21.952" region="r1" style="s1">那片景色、那天所见的一切</p>
+<p begin="00:03:22.077" end="00:03:23.245" region="r1" style="s1">或许都只是一场梦</p>
+<p begin="00:03:25.455" end="00:03:27.082" region="r1" style="s1">然而那并不是梦</p>
+<p begin="00:03:27.958" end="00:03:31.753" region="r1" style="s1">那个夏日，在那天际之上的我们</p>
+<p begin="00:03:32.838" end="00:03:36.341" region="r1" style="s1">改变了世界的样貌</p>
+<p begin="00:04:00.866" end="00:04:03.785" region="r1" style="s1">（提问：我是16岁的高中生）</p>
+<p begin="00:04:07.038" end="00:04:10.792" region="r1" style="s1">即将发布豪雨特报</p>
+<p begin="00:04:11.501" end="00:04:12.919" region="r1" style="s1">又要下雨了呢</p>
+<p begin="00:04:13.044" end="00:04:14.796" region="r1" style="s1">好不容易才放晴呢…</p>
+<p begin="00:04:17.007" end="00:04:19.634" region="r1" style="s1">在岛上也一直遇到台风</p>
+<p begin="00:04:20.177" end="00:04:21.178" region="r1" style="s1">不好意思，借过</p>
+</div>
 </body>
 </tt>`;
-
-    return ttml;
-}
+// ===== 你需要把上面的字幕替换成你的完整字幕内容 =====
+// ===== 从你的 DFXP 文件里复制所有 <p> 标签放到上面 =====
 
 /***************** 主处理逻辑 *****************/
-(async () => {
-    log(`⚠ 拦截到请求: ${$request.url}`);
+// 直接替换，不做任何网络请求，不做任何判断
+// 和 DualSubs/Universal 的 Translate.response.bundle.js 行为一致
+$response.body = SUBTITLE_TTML;
 
-    // ====== 关键检查：判断原始响应是否为字幕 ======
-    // 检查原始 body 是否包含 XML/TTML 字幕特征
-    const body = $response.body || "";
-    const isXmlSubtitle = (
-        body.includes("<?xml") ||
-        body.includes("<tt ") ||
-        body.includes("<tt>") ||
-        body.includes("</tt>") ||
-        body.includes("<body>") ||
-        body.includes("ttml")
-    );
+// 清理 headers
+if ($response.headers) {
+    delete $response.headers["Content-Length"];
+    delete $response.headers["content-length"];
+    if ($response.headers["Content-Encoding"]) $response.headers["Content-Encoding"] = "identity";
+    if ($response.headers["content-encoding"]) $response.headers["content-encoding"] = "identity";
+}
 
-    if (!isXmlSubtitle) {
-        // 不是字幕内容，直接放行，不做任何处理
-        log(`⏭ 非字幕内容，跳过 (body前50字符: ${body.substring(0, 50)})`);
-        $done($response);
-        return;
-    }
-
-    // 确认是字幕，发送通知
-    notify(NAME, "🎬 检测到字幕请求", `body大小: ${body.length}`);
-    log(`📝 确认为字幕请求, body大小: ${body.length}`);
-
-    if (!DFXP_SUBTITLE_URL || DFXP_SUBTITLE_URL === "https://example.com/your-subtitle.dfxp") {
-        $done($response);
-        return;
-    }
-
-    let dfxpBody = null;
-    try {
-        const resp = await httpGet(DFXP_SUBTITLE_URL);
-        if (resp && resp.body && resp.body.length > 100) {
-            dfxpBody = resp.body;
-            log(`✅ DFXP 下载成功, 大小: ${dfxpBody.length}`);
-        }
-    } catch (e) {
-        log(`❌ 下载失败: ${e}`);
-        notify(NAME, "❌ 下载失败", `${e}`);
-    }
-
-    if (dfxpBody && dfxpBody.length > 100) {
-        const netflixTtml = convertDfxpToNetflixTtml(dfxpBody);
-
-        if (netflixTtml) {
-            $response.body = netflixTtml;
-
-            if ($response.headers) {
-                delete $response.headers["Content-Length"];
-                delete $response.headers["content-length"];
-                delete $response.headers["Content-Encoding"];
-                delete $response.headers["content-encoding"];
-            }
-
-            notify(NAME, "✅ 字幕注入成功", `${netflixTtml.length} 字节`);
-        } else {
-            notify(NAME, "❌ DFXP解析失败", "0条字幕");
-        }
-    }
-})()
-    .catch(e => {
-        log(`❌ 脚本异常: ${e}`);
-    })
-    .finally(() => $done($response));
+$done($response);
