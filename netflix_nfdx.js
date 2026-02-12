@@ -3,7 +3,7 @@
  */
 
 // 你的转换好的 NFDX/XML 字幕链接
-const MY_NFDX_URL = "https://gist.githubusercontent.com/你的用户名/xxxx/raw/converted.xml";
+const MY_NFDX_URL = "https://raw.githubusercontent.com/liworlford/KivoSub/refs/heads/main/WeatheringwithYou2019JAPANESE1080pBluRayx264DTS-FGTch.xml";
 
 const url = $request.url;
 console.log(`[NFDX Inject] 捕获请求: ${url}`);
