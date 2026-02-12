@@ -25,9 +25,17 @@ function httpGet(url) {
     return new Promise((resolve, reject) => {
         const options = {
             url: url,
-            headers: { "User-Agent": "Mozilla/5.0" },
-            policy: "DIRECT"
+            headers: {
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
+                "Accept": "*/*"
+            }
         };
+
+        // Shadowrocket 里加这个 header 可以跳过自身脚本处理，防止循环
+        if (typeof $rocket !== "undefined") {
+            options.headers["X-Surge-Skip-Scripting"] = "true";
+        }
+
         if (typeof $task !== "undefined") {
             $task.fetch(options).then(
                 response => resolve(response),
@@ -50,14 +58,13 @@ function httpGet(url) {
 function convertDfxpToNetflixTtml(dfxpContent) {
     log("🔄 开始转换 DFXP → Netflix TTML");
 
-    // 提取所有字幕条目
     const subtitles = [];
     const regex = /<p\s+begin="([^"]+)"\s+end="([^"]+)"[^>]*>([\s\S]*?)<\/p>/gi;
     let match;
     while ((match = regex.exec(dfxpContent)) !== null) {
         subtitles.push({
-            begin: convertTimeFormat(match[1]),
-            end: convertTimeFormat(match[2]),
+            begin: match[1],
+            end: match[2],
             text: match[3].trim()
         });
     }
@@ -69,9 +76,8 @@ function convertDfxpToNetflixTtml(dfxpContent) {
         return null;
     }
 
-    // 构建 Netflix 兼容的 TTML
     let ttml = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<tt xmlns="http://www.w3.org/ns/ttml" xmlns:tt="http://www.w3.org/ns/ttml" xmlns:tts="http://www.w3.org/ns/ttml#styling" xmlns:ttp="http://www.w3.org/ns/ttml#parameter" ttp:tickRate="10000000" xml:lang="zh">
+<tt xmlns="http://www.w3.org/ns/ttml" xmlns:tts="http://www.w3.org/ns/ttml#styling" xmlns:ttp="http://www.w3.org/ns/ttml#parameter" ttp:tickRate="10000000" xml:lang="zh">
 <head>
 <styling>
 <style xml:id="s1" tts:fontFamily="proportionalSansSerif" tts:fontSize="100%" tts:textAlign="center" tts:color="white"/>
@@ -85,7 +91,6 @@ function convertDfxpToNetflixTtml(dfxpContent) {
 `;
 
     for (const sub of subtitles) {
-        // 转义 XML 特殊字符
         const text = sub.text
             .replace(/&(?!amp;|lt;|gt;|quot;|apos;)/g, "&amp;")
             .replace(/\n/g, "<br/>");
@@ -100,25 +105,10 @@ function convertDfxpToNetflixTtml(dfxpContent) {
     return ttml;
 }
 
-/**
- * 转换时间格式
- * 输入: "00:00:54.179" (HH:MM:SS.mmm)
- * 输出: "00:00:54.179" (保持不变，Netflix TTML 支持此格式)
- */
-function convertTimeFormat(time) {
-    // 已经是标准格式，直接返回
-    return time;
-}
-
 /***************** 主处理逻辑 *****************/
 (async () => {
-    // 发送通知，确认脚本被触发
     notify(NAME, "🎬 脚本已触发", `URL: ${$request.url.substring(0, 80)}...`);
     log(`⚠ 拦截到请求: ${$request.url}`);
-
-    const contentType = $response.headers?.["Content-Type"] || $response.headers?.["content-type"] || "";
-    log(`📋 原始 Content-Type: ${contentType}`);
-    log(`📋 原始 body 长度: ${$response.body ? $response.body.length : "无body"}`);
 
     if (!DFXP_SUBTITLE_URL || DFXP_SUBTITLE_URL === "https://example.com/your-subtitle.dfxp") {
         log(`⚠ DFXP_SUBTITLE_URL 未配置`);
@@ -126,41 +116,53 @@ function convertTimeFormat(time) {
         return;
     }
 
-    log(`⬇️ 下载 DFXP: ${DFXP_SUBTITLE_URL}`);
-
+    // ===== 方法1: 尝试用 $httpClient 下载 =====
+    let dfxpBody = null;
     try {
-        const dfxpResponse = await httpGet(DFXP_SUBTITLE_URL);
-
-        if (dfxpResponse && dfxpResponse.body) {
-            log(`✅ DFXP 下载成功, 大小: ${dfxpResponse.body.length} 字节`);
-
-            // 转换为 Netflix 兼容的 TTML 格式
-            const netflixTtml = convertDfxpToNetflixTtml(dfxpResponse.body);
-
-            if (netflixTtml) {
-                $response.body = netflixTtml;
-
-                if ($response.headers) {
-                    // 删除可能干扰的 header
-                    delete $response.headers["Content-Length"];
-                    delete $response.headers["content-length"];
-                    delete $response.headers["Content-Encoding"];
-                    delete $response.headers["content-encoding"];
-                }
-
-                notify(NAME, "✅ 字幕注入成功", `${netflixTtml.length} 字节`);
-                log(`✅ 字幕注入完成`);
-            } else {
-                notify(NAME, "❌ 字幕转换失败", "未提取到字幕条目");
-                log(`❌ DFXP 转换失败`);
-            }
-        } else {
-            notify(NAME, "❌ 下载失败", "响应为空");
-            log(`❌ 下载失败`);
+        log(`⬇️ 方法1: $httpClient 下载`);
+        const resp = await httpGet(DFXP_SUBTITLE_URL);
+        if (resp && resp.body && resp.body.length > 100) {
+            dfxpBody = resp.body;
+            log(`✅ 方法1成功, 大小: ${dfxpBody.length}`);
         }
-    } catch (error) {
-        notify(NAME, "❌ 出错", `${error}`);
-        log(`❌ 出错: ${error}`);
+    } catch (e1) {
+        log(`⚠ 方法1失败: ${e1}`);
+        notify(NAME, "⚠ 方法1失败", `${e1}`);
+
+        // ===== 方法2: 用 fetch API (部分环境支持) =====
+        try {
+            if (typeof fetch !== "undefined") {
+                log(`⬇️ 方法2: fetch API`);
+                const resp2 = await fetch(DFXP_SUBTITLE_URL);
+                dfxpBody = await resp2.text();
+                log(`✅ 方法2成功, 大小: ${dfxpBody.length}`);
+            }
+        } catch (e2) {
+            log(`⚠ 方法2也失败: ${e2}`);
+        }
+    }
+
+    if (dfxpBody && dfxpBody.length > 100) {
+        const netflixTtml = convertDfxpToNetflixTtml(dfxpBody);
+
+        if (netflixTtml) {
+            $response.body = netflixTtml;
+
+            if ($response.headers) {
+                delete $response.headers["Content-Length"];
+                delete $response.headers["content-length"];
+                delete $response.headers["Content-Encoding"];
+                delete $response.headers["content-encoding"];
+            }
+
+            notify(NAME, "✅ 字幕注入成功", `${netflixTtml.length} 字节`);
+            log(`✅ 字幕注入完成`);
+        } else {
+            notify(NAME, "❌ 字幕转换失败", "DFXP解析出0条字幕");
+        }
+    } else {
+        notify(NAME, "❌ 所有下载方法均失败", "无法获取DFXP文件");
+        log(`❌ 所有下载方法均失败`);
     }
 })()
     .catch(e => {
