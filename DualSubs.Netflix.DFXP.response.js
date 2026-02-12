@@ -27,14 +27,10 @@ function httpGet(url) {
             url: url,
             headers: {
                 "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
-                "Accept": "*/*"
+                "Accept": "*/*",
+                "X-Surge-Skip-Scripting": "true"
             }
         };
-
-        // Shadowrocket 里加这个 header 可以跳过自身脚本处理，防止循环
-        if (typeof $rocket !== "undefined") {
-            options.headers["X-Surge-Skip-Scripting"] = "true";
-        }
 
         if (typeof $task !== "undefined") {
             $task.fetch(options).then(
@@ -52,12 +48,7 @@ function httpGet(url) {
     });
 }
 
-/**
- * 将 DFXP (ttaf1) 格式转换为 Netflix 兼容的 TTML 格式
- */
 function convertDfxpToNetflixTtml(dfxpContent) {
-    log("🔄 开始转换 DFXP → Netflix TTML");
-
     const subtitles = [];
     const regex = /<p\s+begin="([^"]+)"\s+end="([^"]+)"[^>]*>([\s\S]*?)<\/p>/gi;
     let match;
@@ -70,11 +61,7 @@ function convertDfxpToNetflixTtml(dfxpContent) {
     }
 
     log(`🔄 提取到 ${subtitles.length} 条字幕`);
-
-    if (subtitles.length === 0) {
-        log("❌ 未提取到任何字幕条目");
-        return null;
-    }
+    if (subtitles.length === 0) return null;
 
     let ttml = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <tt xmlns="http://www.w3.org/ns/ttml" xmlns:tts="http://www.w3.org/ns/ttml#styling" xmlns:ttp="http://www.w3.org/ns/ttml#parameter" ttp:tickRate="10000000" xml:lang="zh">
@@ -101,45 +88,51 @@ function convertDfxpToNetflixTtml(dfxpContent) {
 </body>
 </tt>`;
 
-    log(`✅ TTML 生成完成, 大小: ${ttml.length} 字节`);
     return ttml;
 }
 
 /***************** 主处理逻辑 *****************/
 (async () => {
-    notify(NAME, "🎬 脚本已触发", `URL: ${$request.url.substring(0, 80)}...`);
     log(`⚠ 拦截到请求: ${$request.url}`);
 
-    if (!DFXP_SUBTITLE_URL || DFXP_SUBTITLE_URL === "https://example.com/your-subtitle.dfxp") {
-        log(`⚠ DFXP_SUBTITLE_URL 未配置`);
+    // ====== 关键检查：判断原始响应是否为字幕 ======
+    // 检查原始 body 是否包含 XML/TTML 字幕特征
+    const body = $response.body || "";
+    const isXmlSubtitle = (
+        body.includes("<?xml") ||
+        body.includes("<tt ") ||
+        body.includes("<tt>") ||
+        body.includes("</tt>") ||
+        body.includes("<body>") ||
+        body.includes("ttml")
+    );
+
+    if (!isXmlSubtitle) {
+        // 不是字幕内容，直接放行，不做任何处理
+        log(`⏭ 非字幕内容，跳过 (body前50字符: ${body.substring(0, 50)})`);
         $done($response);
         return;
     }
 
-    // ===== 方法1: 尝试用 $httpClient 下载 =====
+    // 确认是字幕，发送通知
+    notify(NAME, "🎬 检测到字幕请求", `body大小: ${body.length}`);
+    log(`📝 确认为字幕请求, body大小: ${body.length}`);
+
+    if (!DFXP_SUBTITLE_URL || DFXP_SUBTITLE_URL === "https://example.com/your-subtitle.dfxp") {
+        $done($response);
+        return;
+    }
+
     let dfxpBody = null;
     try {
-        log(`⬇️ 方法1: $httpClient 下载`);
         const resp = await httpGet(DFXP_SUBTITLE_URL);
         if (resp && resp.body && resp.body.length > 100) {
             dfxpBody = resp.body;
-            log(`✅ 方法1成功, 大小: ${dfxpBody.length}`);
+            log(`✅ DFXP 下载成功, 大小: ${dfxpBody.length}`);
         }
-    } catch (e1) {
-        log(`⚠ 方法1失败: ${e1}`);
-        notify(NAME, "⚠ 方法1失败", `${e1}`);
-
-        // ===== 方法2: 用 fetch API (部分环境支持) =====
-        try {
-            if (typeof fetch !== "undefined") {
-                log(`⬇️ 方法2: fetch API`);
-                const resp2 = await fetch(DFXP_SUBTITLE_URL);
-                dfxpBody = await resp2.text();
-                log(`✅ 方法2成功, 大小: ${dfxpBody.length}`);
-            }
-        } catch (e2) {
-            log(`⚠ 方法2也失败: ${e2}`);
-        }
+    } catch (e) {
+        log(`❌ 下载失败: ${e}`);
+        notify(NAME, "❌ 下载失败", `${e}`);
     }
 
     if (dfxpBody && dfxpBody.length > 100) {
@@ -156,17 +149,12 @@ function convertDfxpToNetflixTtml(dfxpContent) {
             }
 
             notify(NAME, "✅ 字幕注入成功", `${netflixTtml.length} 字节`);
-            log(`✅ 字幕注入完成`);
         } else {
-            notify(NAME, "❌ 字幕转换失败", "DFXP解析出0条字幕");
+            notify(NAME, "❌ DFXP解析失败", "0条字幕");
         }
-    } else {
-        notify(NAME, "❌ 所有下载方法均失败", "无法获取DFXP文件");
-        log(`❌ 所有下载方法均失败`);
     }
 })()
     .catch(e => {
-        notify(NAME, "❌ 脚本异常", `${e}`);
         log(`❌ 脚本异常: ${e}`);
     })
     .finally(() => $done($response));
