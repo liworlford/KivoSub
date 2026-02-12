@@ -10,7 +10,7 @@
 /***************** 配置区域 - 修改此处 *****************/
 
 // DFXP 字幕文件的下载 URL（修改为你自己的地址）
-const DFXP_SUBTITLE_URL = "https://example.com/your-subtitle.dfxp";
+const DFXP_SUBTITLE_URL = "https://raw.githubusercontent.com/liworlford/KivoSub/refs/heads/main/WeatheringwithYou2019JAPANESE1080pBluRayx264DTS-FGTch.dfxp";
 
 /***************** 配置区域结束 *****************/
 
